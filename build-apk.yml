@@ -1,9 +1,13 @@
+
 name: Build MYRIX APK
 
 on:
-  push:
-    branches: [main, master]
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '**.zip'
+      - '.github/workflows/build-apk.yml'
 
 permissions:
   contents: read
@@ -11,41 +15,83 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout MYRIX source
+      - name: Download repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Extract MYRIX ZIP
+        shell: bash
+        run: |
+          ZIP=$(find . -type f -iname '*.zip' \
+            -not -path './.git/*' | head -n 1)
 
-      - name: Install Android SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          if [ -z "$ZIP" ]; then
+            echo "ZIP MYRIX tidak ditemukan"
+            exit 1
+          fi
+
+          echo "Mengekstrak: $ZIP"
+          mkdir -p extracted
+          unzip -oq "$ZIP" -d extracted
+
+          echo "Isi hasil ekstrak:"
+          find extracted -maxdepth 4 -type f | head -100
+
+      - name: Find Android project
+        id: project
+        shell: bash
+        run: |
+          ROOT=""
+
+          while IFS= read -r file; do
+            DIR="$(dirname "$file")"
+            if { [ -f "$DIR/settings.gradle" ] || \
+                 [ -f "$DIR/settings.gradle.kts" ]; } && \
+               { [ -f "$DIR/app/build.gradle" ] || \
+                 [ -f "$DIR/app/build.gradle.kts" ]; }; then
+              ROOT="$DIR"
+              break
+            fi
+          done < <(find extracted -type f \
+            \( -name settings.gradle \
+            -o -name settings.gradle.kts \))
+
+          if [ -z "$ROOT" ]; then
+            echo "Proyek Android tidak ditemukan dalam ZIP"
+            exit 1
+          fi
+
+          echo "project_dir=$ROOT" >> "$GITHUB_OUTPUT"
+          echo "Proyek: $ROOT"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Verify project files
+      - name: Build APK
+        shell: bash
         run: |
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/src/main/AndroidManifest.xml
+          cd "${{ steps.project.outputs.project_dir }}"
 
-      - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: MYRIX-debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: extracted/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
