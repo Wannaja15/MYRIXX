@@ -3,8 +3,7 @@ name: Build MYRIX APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,41 +14,63 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download source code
+      - name: Download MYRIX source
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build MYRIX APK
+      - name: Find Android project
+        id: project
         shell: bash
         run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          elif [ -f "app/gradlew" ]; then
-            cd app
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          elif [ -f "app/build.gradle" ] || [ -f "app/build.gradle.kts" ]; then
-            gradle assembleDebug
-          elif [ -f "MYRIX_Android/gradlew" ]; then
-            cd MYRIX_Android
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          else
-            echo "File Gradle proyek tidak ditemukan."
-            echo "Periksa lokasi build.gradle dan gradlew."
+          ROOT=""
+
+          while IFS= read -r file; do
+            DIR="$(dirname "$file")"
+
+            if { [ -f "$DIR/settings.gradle" ] || \
+                 [ -f "$DIR/settings.gradle.kts" ]; } && \
+               { [ -f "$DIR/app/build.gradle" ] || \
+                 [ -f "$DIR/app/build.gradle.kts" ]; }; then
+              ROOT="$DIR"
+              break
+            fi
+          done < <(find . -type f \
+            \( -name settings.gradle \
+            -o -name settings.gradle.kts \) \
+            -not -path '*/.gradle/*')
+
+          if [ -z "$ROOT" ]; then
+            echo "ERROR: Proyek Android tidak ditemukan."
+            echo "Pastikan settings.gradle dan folder app sudah diunggah."
             exit 1
           fi
 
-      - name: Upload APK
+          echo "project_dir=$ROOT" >> "$GITHUB_OUTPUT"
+          echo "Proyek ditemukan: $ROOT"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          cd "${{ steps.project.outputs.project_dir }}"
+
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
+
+      - name: Upload MYRIX APK
         uses: actions/upload-artifact@v4
         with:
           name: MYRIX-debug-APK
